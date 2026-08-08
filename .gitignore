@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# PSX2PSP generated files
+psx2psp_py/cache/
+psx2psp_py/output/
+psx2psp_py/assets/
+
+# Keep directory stubs
+!psx2psp_py/cache/.gitkeep
+!psx2psp_py/output/.gitkeep
+!psx2psp_py/assets/.gitkeep
+
+# Saved settings (machine-specific)
+Files/psx2psp_py.ini
+
+# Test artefacts
+*.at3
+*.wav
+test_*.at3
+test_*.wav
+
+# Large game files — don't commit disc images
+*.bin
+*.iso
+*.img
+*.cue
+Games/
+
+# Windows
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs
+*.log
