@@ -5,8 +5,26 @@ import os
 import sys
 
 # ── Root of the PSX2PSP installation (parent of psx2psp_py/) ─────────────────
-ROOT_DIR   = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-PY_DIR     = os.path.join(ROOT_DIR, "psx2psp_py")
+# When running as a PyInstaller frozen EXE:
+#   sys.frozen = True
+#   sys.executable = path to the .exe  (e.g.  C:\Games\PSX2PSP\PSX2PSP_Enhanced.exe)
+#   __file__       = inside _MEIPASS temp dir (wrong for data files!)
+# When running from source:
+#   __file__ = .../psx2psp_py/modules/constants.py  → two levels up = project root
+#
+# We always want the directory containing the EXE (or the project root when
+# running from source) so that at3tool.exe, Files/gameInfo.db etc. are found.
+
+if getattr(sys, "frozen", False):
+    # Frozen EXE: root = directory of the .exe itself
+    _EXE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    ROOT_DIR  = _EXE_DIR
+    PY_DIR    = _EXE_DIR          # cache/output sit next to the exe
+else:
+    # Source: root = two levels above this file (…/psx2psp_py/modules/constants.py)
+    ROOT_DIR  = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    PY_DIR    = os.path.join(ROOT_DIR, "psx2psp_py")
+
 CACHE_DIR  = os.path.join(PY_DIR, "cache")
 OUTPUT_DIR = os.path.join(PY_DIR, "output")
 ASSETS_DIR = os.path.join(PY_DIR, "assets")

@@ -2000,5 +2000,17 @@ class App(tk.Tk):
             self._nb.select(0)
 
     def _on_close(self):
+        """Clean shutdown — cancel any running jobs, save settings, exit."""
+        # Cancel any running batch/single conversion
+        for tab_attr in ("_single_tab", "_batch_tab"):
+            tab = getattr(self, tab_attr, None)
+            if tab:
+                runner = getattr(tab, "_runner", None)
+                if runner and runner.is_running:
+                    runner.cancel()
+
         _save_settings(self._settings)
         self.destroy()
+        # Force-exit the process so daemon threads (yt-dlp, network fetches,
+        # done_event.wait() calls) don't keep the EXE alive after the window closes.
+        sys.exit(0)
