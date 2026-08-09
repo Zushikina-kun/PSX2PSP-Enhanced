@@ -290,6 +290,7 @@ class SingleGameTab(ttk.Frame):
         self._disc_paths: List[str] = []
         self._runner:     Optional[BatchRunner] = None
         self._artwork     = None   # ArtworkBundle reference
+        self._patch_candidates: list = []   # PatchCandidate objects selected by user
         self._build()
 
     def _build(self):
@@ -391,6 +392,14 @@ class SingleGameTab(ttk.Frame):
              self._fetch_artwork_only).pack(fill="x", pady=2)
         _btn(right, "🎵 Fetch BGM",
              self._fetch_bgm_only).pack(fill="x", pady=2)
+        _btn(right, "🩹 Patches / Mods",
+             self._fetch_patches).pack(fill="x", pady=2)
+
+        # Patch status label
+        self._v_patch_status = tk.StringVar(value="No patches selected")
+        ttk.Label(right, textvariable=self._v_patch_status,
+                  font=FONT_SMALL, foreground=CLR_FG2,
+                  wraplength=190).pack(pady=(0, 2))
 
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=6)
 
@@ -617,6 +626,29 @@ class SingleGameTab(ttk.Frame):
 
         threading.Thread(target=_work, daemon=True).start()
 
+    def _fetch_patches(self):
+        """Open PatchPickDialog. Stores selected patches in self._patch_candidates."""
+        serial = self._v_serial.get().strip() or "UNKN00000"
+        from .bgm import clean_title as _ct
+        title  = _ct(self._v_title.get().strip() or serial)
+
+        def _on_result(candidates: list):
+            self._patch_candidates = candidates
+            n = len(candidates)
+            if n:
+                names = ", ".join(c.title[:20] for c in candidates[:2])
+                if n > 2:
+                    names += f"… +{n - 2} more"
+                self._v_patch_status.set(f"✔ {n} patch(es): {names}")
+                self._safe_log(f"Patches ready: {n} selected.")
+            else:
+                self._v_patch_status.set("No patches selected")
+                self._safe_log("No patches selected.")
+
+        sources = self._settings.get(
+            "patch_sources", ["romhacking", "archive", "psxplace"])
+        PatchPickDialog(self, title, serial, _on_result, initial_sources=sources)
+
     def _safe_log(self, msg: str):
         self.after(0, lambda: self._log.append(msg))
 
@@ -649,6 +681,9 @@ class SingleGameTab(ttk.Frame):
             fetch_artwork  = bool(s.get("fetch_artwork", True)),
             fetch_bgm      = bool(s.get("fetch_bgm", True)),
             bgm_sources    = s.get("bgm_sources", ["khinsider", "archive", "youtube"]),
+            patch_candidates     = list(self._patch_candidates),
+            auto_search_patches  = bool(s.get("auto_search_patches", False)),
+            patch_sources        = s.get("patch_sources", ["romhacking", "archive", "psxplace"]),
         )
         return spec
 
@@ -827,10 +862,13 @@ class BatchTab(ttk.Frame):
             return
         s = self._settings
         for spec in self._specs:
-            spec.output_dir    = s.get("output_dir", OUTPUT_DIR) or OUTPUT_DIR
-            spec.comp_level    = int(s.get("comp_level", DEFAULT_COMPRESS))
-            spec.fetch_artwork = bool(s.get("fetch_artwork", True))
-            spec.fetch_bgm     = bool(s.get("fetch_bgm", True))
+            spec.output_dir         = s.get("output_dir", OUTPUT_DIR) or OUTPUT_DIR
+            spec.comp_level         = int(s.get("comp_level", DEFAULT_COMPRESS))
+            spec.apply_patches      = bool(s.get("apply_patches", False))   # FIX: was missing
+            spec.auto_search_patches= bool(s.get("auto_search_patches", False))
+            spec.fetch_artwork      = bool(s.get("fetch_artwork", True))
+            spec.fetch_bgm          = bool(s.get("fetch_bgm", True))
+            spec.bgm_sources        = s.get("bgm_sources", ["khinsider", "archive", "youtube"])
 
         self._log.clear()
         total = len(self._specs)
@@ -891,9 +929,40 @@ class SettingsTab(ttk.Frame):
         comp_spin.grid(row=0, column=1, sticky="w", **pad)
 
         self._v_patches = tk.BooleanVar(value=self._s.get("apply_patches", False))
-        ttk.Checkbutton(conv_f, text="Apply PAL→NTSC patches automatically",
+        ttk.Checkbutton(conv_f, text="Apply built-in PAL→NTSC byte patches",
                         variable=self._v_patches).grid(
             row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        # ── Patches / Mods ────────────────────────────────────────────────────
+        patch_f = ttk.LabelFrame(self, text=" Patches / Mods / Translations ")
+        patch_f.pack(fill="x", padx=10, pady=4)
+
+        self._v_auto_patches = tk.BooleanVar(
+            value=self._s.get("auto_search_patches", False))
+        ttk.Checkbutton(patch_f,
+                        text="Auto-search for patches when converting (romhacking/archive)",
+                        variable=self._v_auto_patches).grid(
+            row=0, column=0, columnspan=3, sticky="w", **pad)
+
+        ttk.Label(patch_f, text="Search sources:").grid(
+            row=1, column=0, sticky="w", **pad)
+        saved_psrc = self._s.get("patch_sources",
+                                  ["romhacking", "archive", "psxplace"])
+        self._patch_src_vars = {}
+        psrc_frame = ttk.Frame(patch_f)
+        psrc_frame.grid(row=1, column=1, columnspan=2, sticky="w")
+        for src, label in [("romhacking", "romhacking.net"),
+                            ("archive",    "Archive.org"),
+                            ("psxplace",   "PSX-Place")]:
+            v = tk.BooleanVar(value=src in saved_psrc)
+            self._patch_src_vars[src] = v
+            ttk.Checkbutton(psrc_frame, text=label, variable=v).pack(
+                side="left", padx=6)
+
+        ttk.Label(patch_f,
+                  text="ℹ  For xdelta3 patches, place xdelta3.exe in tools/ folder.",
+                  foreground=CLR_FG2, font=FONT_SMALL).grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=12)
 
         # ── Artwork ───────────────────────────────────────────────────────────
         art_f = ttk.LabelFrame(self, text=" Artwork ")
@@ -1039,21 +1108,23 @@ class SettingsTab(ttk.Frame):
                 messagebox.showerror("Error", str(e))
 
     def _save(self):
-        self._s["comp_level"]        = self._v_comp.get()
-        self._s["apply_patches"]     = self._v_patches.get()
-        self._s["fetch_artwork"]     = self._v_fetch_art.get()
-        self._s["fetch_screenshot"]  = self._v_fetch_shot.get()
-        self._s["animate_icon"]      = self._v_animate_icon.get()
-        self._s["tgdb_api_key"]      = self._v_tgdb_key.get().strip()
-        self._s["fetch_bgm"]         = self._v_fetch_bgm.get()
-        self._s["loop_bgm"]          = self._v_loop_bgm.get()
-        self._s["at3_bitrate"]       = self._v_at3_br.get()
-        self._s["output_dir"]        = self._v_outdir.get()
-        # BGM source order: enabled sources in display order
+        self._s["comp_level"]           = self._v_comp.get()
+        self._s["apply_patches"]        = self._v_patches.get()
+        self._s["auto_search_patches"]  = self._v_auto_patches.get()
+        self._s["patch_sources"]        = [s for s, v in self._patch_src_vars.items()
+                                            if v.get()]
+        self._s["fetch_artwork"]        = self._v_fetch_art.get()
+        self._s["fetch_screenshot"]     = self._v_fetch_shot.get()
+        self._s["animate_icon"]         = self._v_animate_icon.get()
+        self._s["tgdb_api_key"]         = self._v_tgdb_key.get().strip()
+        self._s["fetch_bgm"]            = self._v_fetch_bgm.get()
+        self._s["loop_bgm"]             = self._v_loop_bgm.get()
+        self._s["at3_bitrate"]          = self._v_at3_br.get()
+        self._s["output_dir"]           = self._v_outdir.get()
         order = ["khinsider", "archive", "youtube"]
         self._s["bgm_sources"] = [s for s in order
-                                   if self._bgm_src_vars.get(s, tk.BooleanVar(value=True)).get()]
-        # Apply TGDB key to environment immediately
+                                   if self._bgm_src_vars.get(
+                                       s, tk.BooleanVar(value=True)).get()]
         key = self._s["tgdb_api_key"]
         if key:
             os.environ["TGDB_API_KEY"] = key
@@ -1159,6 +1230,22 @@ class AboutTab(ttk.Frame):
         ttk.Label(body, text=bgm_txt, justify="left",
                   foreground=CLR_FG2, font=FONT_SMALL).pack(anchor="w", pady=4)
 
+        ttk.Separator(body, orient="horizontal").pack(fill="x", pady=8)
+
+        ttk.Label(body, text="Patch / Mod / Translation Sources",
+                  font=FONT_TITLE, foreground=CLR_HILIGHT).pack(anchor="w")
+        patch_txt = (
+            "Patch formats supported: IPS, BPS (Beat), xdelta3, ZIP archives\n"
+            "\n1. romhacking.net — Translations + Hacks (platform=PlayStation)\n"
+            "2. Archive.org    — Search API for .ips/.bps/.xdelta collections\n"
+            "3. PSX-Place      — Tag pages: english-patch, ps1-patches, translation\n"
+            "\nFor xdelta3 patches: place xdelta3.exe in the tools/ folder.\n"
+            "Built-in PAL→NTSC patches: 6 byte-pattern patches via patches.ini\n"
+            "  (applied inside popstation.dll during conversion)"
+        )
+        ttk.Label(body, text=patch_txt, justify="left",
+                  foreground=CLR_FG2, font=FONT_SMALL).pack(anchor="w", pady=4)
+
     def _check_deps(self):
         import shutil
         from .constants import AT3TOOL_EXE, LAME_EXE, POPSTATION_DLL, BASE_PBP
@@ -1179,6 +1266,10 @@ class AboutTab(ttk.Frame):
             ("at3tool.exe",    AT3TOOL_EXE),
             ("lame.exe",       LAME_EXE),
             ("ffmpeg",         shutil.which("ffmpeg") or ""),
+            ("xdelta3",        shutil.which("xdelta3") or
+                               os.path.join(str(__import__(
+                                   "modules.constants", fromlist=["ROOT_DIR"]
+                               ).ROOT_DIR), "tools", "xdelta3.exe")),
         ]
         for name, path in tools:
             ok = bool(path and os.path.isfile(path))
@@ -1193,17 +1284,19 @@ def _load_settings() -> dict:
     import configparser
     from .constants import SETTINGS_INI
     s = {
-        "comp_level":       DEFAULT_COMPRESS,
-        "apply_patches":    False,
-        "fetch_artwork":    True,
-        "fetch_screenshot": True,
-        "animate_icon":     True,
-        "tgdb_api_key":     "",
-        "fetch_bgm":        True,
-        "loop_bgm":         True,
-        "at3_bitrate":      132,
-        "output_dir":       OUTPUT_DIR,
-        "bgm_sources":      ["khinsider", "archive", "youtube"],
+        "comp_level":           DEFAULT_COMPRESS,
+        "apply_patches":        False,
+        "auto_search_patches":  False,
+        "patch_sources":        ["romhacking", "archive", "psxplace"],
+        "fetch_artwork":        True,
+        "fetch_screenshot":     True,
+        "animate_icon":         True,
+        "tgdb_api_key":         "",
+        "fetch_bgm":            True,
+        "loop_bgm":             True,
+        "at3_bitrate":          132,
+        "output_dir":           OUTPUT_DIR,
+        "bgm_sources":          ["khinsider", "archive", "youtube"],
     }
     cfg    = configparser.ConfigParser()
     py_ini = os.path.join(os.path.dirname(SETTINGS_INI), "psx2psp_py.ini")
@@ -1215,7 +1308,8 @@ def _load_settings() -> dict:
                 if cfg.has_option(sec, k):
                     s[k] = cfg.getint(sec, k)
             for k in ("apply_patches", "fetch_artwork", "fetch_screenshot",
-                       "animate_icon", "fetch_bgm", "loop_bgm"):
+                       "animate_icon", "fetch_bgm", "loop_bgm",
+                       "auto_search_patches"):
                 if cfg.has_option(sec, k):
                     s[k] = cfg.getboolean(sec, k)
             for k in ("output_dir", "tgdb_api_key"):
@@ -1224,6 +1318,9 @@ def _load_settings() -> dict:
             if cfg.has_option(sec, "bgm_sources"):
                 raw = cfg.get(sec, "bgm_sources")
                 s["bgm_sources"] = [x.strip() for x in raw.split(",") if x.strip()]
+            if cfg.has_option(sec, "patch_sources"):
+                raw = cfg.get(sec, "patch_sources")
+                s["patch_sources"] = [x.strip() for x in raw.split(",") if x.strip()]
     # Apply TGDB key to environment
     if s["tgdb_api_key"]:
         os.environ["TGDB_API_KEY"] = s["tgdb_api_key"]
@@ -1320,6 +1417,211 @@ class SearchDialog(tk.Toplevel):
         if gi:
             self._cb(gi)
             self.destroy()
+
+
+# ── Patch Pick Dialog ─────────────────────────────────────────────────────────
+
+class PatchPickDialog(tk.Toplevel):
+    """
+    Search for patches online, show results with checkboxes, download selected.
+    After the user confirms, calls result_cb(selected_candidates: list).
+    """
+
+    def __init__(self, parent, game_name: str, serial: str, result_cb,
+                 initial_sources=None):
+        super().__init__(parent)
+        self.title("Patch Search & Apply")
+        self.configure(bg=CLR_BG)
+        self.geometry("780x520")
+        self.resizable(True, True)
+        self._game_name    = game_name
+        self._serial       = serial
+        self._result_cb    = result_cb
+        self._sources      = initial_sources or ["romhacking", "archive", "psxplace"]
+        self._candidates:  list = []
+        self._check_vars:  list = []
+        self._build()
+        self.grab_set()
+
+    def _build(self):
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=8, pady=(6, 2))
+        ttk.Label(top, text="Sources:", font=FONT_SMALL,
+                  foreground=CLR_FG2).pack(side="left")
+        self._src_vars = {}
+        for src in ["romhacking", "archive", "psxplace"]:
+            v = tk.BooleanVar(value=src in self._sources)
+            self._src_vars[src] = v
+            ttk.Checkbutton(top, text=src, variable=v).pack(side="left", padx=4)
+        ttk.Label(top, text="  Query:", font=FONT_SMALL,
+                  foreground=CLR_FG2).pack(side="left", padx=(8, 2))
+        self._v_query = tk.StringVar(value=self._game_name)
+        ttk.Entry(top, textvariable=self._v_query, width=28).pack(side="left")
+        _btn(top, "🔍 Search", self._do_search).pack(side="left", padx=4)
+
+        list_f = ttk.LabelFrame(self, text=" Results (check to apply) ")
+        list_f.pack(fill="both", expand=True, padx=8, pady=4)
+        self._canvas = tk.Canvas(list_f, bg=CLR_BG, highlightthickness=0)
+        vsb = ttk.Scrollbar(list_f, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        self._list_frame = ttk.Frame(self._canvas)
+        self._canvas.create_window((0, 0), window=self._list_frame, anchor="nw")
+        self._list_frame.bind("<Configure>",
+            lambda e: self._canvas.configure(
+                scrollregion=self._canvas.bbox("all")))
+
+        local_f = ttk.LabelFrame(
+            self, text=" Add Local Patch File (.ips/.bps/.xdelta/.zip) ")
+        local_f.pack(fill="x", padx=8, pady=2)
+        self._v_local = tk.StringVar()
+        ttk.Entry(local_f, textvariable=self._v_local, width=52).pack(
+            side="left", padx=4, pady=4)
+        _btn(local_f, "…", self._browse_local).pack(side="left", padx=2)
+        _btn(local_f, "➕ Add", self._add_local).pack(side="left", padx=4)
+
+        self._status = ttk.Label(self, text="Press 🔍 Search to find patches.",
+                                  foreground=CLR_FG2, font=FONT_SMALL)
+        self._status.pack(fill="x", padx=10)
+
+        btns = ttk.Frame(self)
+        btns.pack(fill="x", padx=8, pady=6)
+        _btn(btns, "⬇  Download & Apply Selected",
+             self._confirm, style="Accent.TButton").pack(side="right", padx=4)
+        _btn(btns, "✖  Cancel", self.destroy).pack(side="right")
+        _btn(btns, "☑  All",  lambda: self._toggle_all(True)).pack(side="left", padx=2)
+        _btn(btns, "☐  None", lambda: self._toggle_all(False)).pack(side="left")
+
+    def _do_search(self):
+        sources = [s for s, v in self._src_vars.items() if v.get()]
+        query   = self._v_query.get().strip() or self._game_name
+        self._status.configure(
+            text=f"Searching '{query}'…", foreground=CLR_ORANGE)
+        self.update_idletasks()
+
+        def _work():
+            from .patches import search_patches
+            results = search_patches(
+                query, self._serial, sources=sources,
+                progress_cb=lambda m: self.after(
+                    0, lambda msg=m: self._status.configure(text=msg)))
+            self.after(0, lambda: self._populate(results))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _populate(self, candidates: list):
+        self._candidates = candidates
+        self._check_vars = []
+        for w in self._list_frame.winfo_children():
+            w.destroy()
+
+        if not candidates:
+            ttk.Label(self._list_frame,
+                      text="No patches found. Try a shorter title or different sources.",
+                      foreground=CLR_FG2, font=FONT_SMALL).pack(
+                anchor="w", padx=8, pady=8)
+            self._status.configure(text="No results.", foreground=CLR_RED)
+            return
+
+        for c in candidates:
+            row = ttk.Frame(self._list_frame)
+            row.pack(fill="x", padx=4, pady=1)
+            var = tk.BooleanVar(value=False)
+            self._check_vars.append(var)
+            ttk.Checkbutton(row, variable=var).pack(side="left")
+
+            badge_col = {"romhacking-trans": CLR_GREEN,
+                         "romhacking-hack":  CLR_ACCENT,
+                         "archive":          CLR_ORANGE,
+                         "psxplace":         CLR_HILIGHT,
+                         "local":            CLR_FG2}.get(c.source, CLR_FG2)
+            ttk.Label(row, text=f"[{c.source[:10]}]",
+                      foreground=badge_col, font=FONT_SMALL,
+                      width=14).pack(side="left", padx=2)
+
+            ext_col = CLR_GREEN if c.patch_type in ("ips", "bps") else CLR_ORANGE
+            ttk.Label(row, text=(c.patch_type.upper() or "?"),
+                      foreground=ext_col, font=FONT_SMALL,
+                      width=6).pack(side="left")
+
+            lbl = c.title[:60]
+            if c.author:
+                lbl += f"  (by {c.author})"
+            ttk.Label(row, text=lbl, anchor="w",
+                      wraplength=420, font=FONT_SMALL).pack(
+                side="left", fill="x", expand=True)
+
+            if c.url.startswith("http"):
+                _btn(row, "🔗", lambda u=c.url: self._open_url(u),
+                     width=3).pack(side="right", padx=2)
+
+        self._status.configure(
+            text=f"{len(candidates)} patch(es) found. Check ones to apply.",
+            foreground=CLR_GREEN)
+
+    def _open_url(self, url: str):
+        import webbrowser
+        webbrowser.open(url)
+
+    def _toggle_all(self, state: bool):
+        for v in self._check_vars:
+            v.set(state)
+
+    def _browse_local(self):
+        path = filedialog.askopenfilename(
+            title="Select patch file",
+            filetypes=[("Patch files", "*.ips *.bps *.xdelta *.xdelta3 *.zip"),
+                       ("All files", "*.*")])
+        if path:
+            self._v_local.set(path)
+
+    def _add_local(self):
+        path = self._v_local.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("Not found", f"File not found:\n{path}")
+            return
+        from .patches import PatchCandidate, detect_patch_format
+        c = PatchCandidate(source="local", title=os.path.basename(path),
+                           url="", patch_type=detect_patch_format(path),
+                           local_path=path)
+        self._candidates.append(c)
+        self._check_vars.append(tk.BooleanVar(value=True))
+        self._populate(self._candidates)
+        self._v_local.set("")
+
+    def _confirm(self):
+        selected = [c for c, v in zip(self._candidates, self._check_vars)
+                    if v.get()]
+        if not selected:
+            messagebox.showinfo("Nothing selected",
+                                "Check at least one patch to apply.")
+            return
+        self._status.configure(
+            text=f"Downloading {len(selected)} patch(es)…",
+            foreground=CLR_ORANGE)
+        self.update_idletasks()
+
+        def _work():
+            from .patches import download_patch
+            from .game_db import normalise_serial
+            serial = normalise_serial(self._serial)
+            ready  = []
+            for c in selected:
+                if c.local_path and os.path.isfile(c.local_path):
+                    ready.append(c)
+                elif download_patch(c, serial,
+                                    lambda m: self.after(
+                                        0, lambda msg=m:
+                                        self._status.configure(text=msg))):
+                    ready.append(c)
+            self.after(0, lambda: self._finish(ready))
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _finish(self, ready: list):
+        self._result_cb(ready)
+        self.destroy()
 
 
 # ── BGM Pick Dialog ──────────────────────────────────────────────────────────

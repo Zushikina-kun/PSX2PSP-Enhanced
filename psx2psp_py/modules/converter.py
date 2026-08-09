@@ -549,18 +549,19 @@ class ConversionJob:
             log_cb(f"Running bridge: {py32}")
 
         spec = _json.dumps({
-            "iso_path":   self.iso_paths[0] if self.iso_paths else "",
-            "output_pbp": self.output_pbp,
-            "game_title": self.game_title,
-            "save_title": self.save_title,
-            "game_id":    self.game_id,
-            "save_id":    self.save_id,
-            "icon0_path": self.icon0_path,
-            "pic0_path":  self.pic0_path,
-            "pic1_path":  self.pic1_path,
-            "snd0_path":  self.snd0_path,
-            "boot_path":  self.boot_path,
-            "comp_level": self.comp_level,
+            "iso_path":      self.iso_paths[0] if self.iso_paths else "",
+            "output_pbp":    self.output_pbp,
+            "game_title":    self.game_title,
+            "save_title":    self.save_title,
+            "game_id":       self.game_id,
+            "save_id":       self.save_id,
+            "icon0_path":    self.icon0_path,
+            "pic0_path":     self.pic0_path,
+            "pic1_path":     self.pic1_path,
+            "snd0_path":     self.snd0_path,
+            "boot_path":     self.boot_path,
+            "comp_level":    self.comp_level,
+            "apply_patches": self.apply_patches,   # FIX: was missing
         })
 
         try:

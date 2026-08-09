@@ -24,7 +24,6 @@ from .bgm       import search_and_get_bgm
 from .converter import ConversionJob, normalise_to_iso
 from .constants import OUTPUT_DIR, DEFAULT_COMPRESS
 
-
 # ── Per-game job spec ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -49,14 +48,20 @@ class GameSpec:
     custom_pic1:   str  = ""
     custom_snd0:   str  = ""                 # path to audio file (any format)
 
-    # Options
+    # Patch options
+    apply_patches:       bool         = False   # apply built-in PAL→NTSC byte patches
+    patch_files:         List[str]    = field(default_factory=list)  # local .ips/.bps paths
+    patch_sources:       List[str]    = field(default_factory=list)  # ["romhacking","archive","psxplace"]
+    auto_search_patches: bool         = False   # auto-search online for patches
+    patch_candidates:    list         = field(default_factory=list)  # PatchCandidate objects (GUI-selected)
+
+    # Conversion options
     output_dir:    str  = ""
     comp_level:    int  = DEFAULT_COMPRESS
-    apply_patches: bool = False
     fetch_artwork: bool = True
     fetch_bgm:     bool = True
     loop_bgm:      bool = True
-    bgm_sources:   Optional[list] = None  # None = use default order (khinsider, archive, youtube)
+    bgm_sources:   Optional[list] = None  # None = use default order
 
 
 @dataclass
@@ -206,6 +211,64 @@ class Pipeline:
 
         return ""
 
+    def _step_apply_patches(self, iso_paths: List[str], tmp: str) -> List[str]:
+        """
+        Apply IPS/BPS/xdelta patches to disc images.
+        Handles three sources in order:
+          1. spec.patch_files — local patch files supplied by the user
+          2. online search    — if spec.auto_search_patches, search + download
+          3. GUI-selected     — spec.patch_candidates (PatchCandidate objects)
+
+        Returns a new list of ISO paths (patched copies in tmp, or originals).
+        """
+        from .patches import (
+            PatchCandidate, search_patches, download_patch,
+            apply_patches_to_iso, patch_iso,
+        )
+        from .game_db import normalise_serial
+        spec = self.spec
+
+        # Collect all patches to apply
+        candidates: List[PatchCandidate] = []
+
+        # 1. Local files the user added manually
+        for p in (spec.patch_files or []):
+            if os.path.isfile(p):
+                candidates.append(PatchCandidate(
+                    source="local", title=os.path.basename(p),
+                    url="", local_path=p))
+
+        # 2. Pre-fetched GUI-selected candidates (set by GUI's PatchPickDialog)
+        for c in getattr(spec, "patch_candidates", []):
+            if c not in candidates:
+                candidates.append(c)
+
+        # 3. Auto-search online
+        if spec.auto_search_patches and not candidates:
+            self._log("Searching for patches online…")
+            sources  = spec.patch_sources or ["romhacking", "archive", "psxplace"]
+            found    = search_patches(spec.game_title, spec.serial,
+                                      sources=sources,
+                                      progress_cb=self._log)
+            serial   = normalise_serial(spec.serial)
+            for c in found[:3]:   # auto-apply first 3 matches max
+                if download_patch(c, serial, self._log):
+                    candidates.append(c)
+
+        if not candidates:
+            return iso_paths  # nothing to patch
+
+        # Apply each disc independently (patches usually target disc 1)
+        patched_paths = []
+        for idx, iso in enumerate(iso_paths):
+            if idx == 0:
+                # Only patch disc 1 (serial detection and main game code)
+                patched = apply_patches_to_iso(iso, candidates, tmp, self._log)
+                patched_paths.append(patched)
+            else:
+                patched_paths.append(iso)   # disc 2+ pass through unchanged
+        return patched_paths
+
     def _step_convert(self, iso_paths: List[str],
                       bundle: ArtworkBundle, at3_path: str,
                       tmp: str) -> bool:
@@ -283,6 +346,15 @@ class Pipeline:
             iso_paths = self._step_normalise_images(tmp)
             if iso_paths is None:
                 return self._result
+
+            # 3b. Apply patches (IPS/BPS/xdelta + built-in PAL→NTSC)
+            if self._cancel.is_set(): return self._result
+            has_external = bool(
+                getattr(spec, "patch_files", []) or
+                getattr(spec, "patch_candidates", []) or
+                spec.auto_search_patches)
+            if has_external:
+                iso_paths = self._step_apply_patches(iso_paths, tmp)
 
             # 4. Artwork
             if self._cancel.is_set(): return self._result

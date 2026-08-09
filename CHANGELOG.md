@@ -4,7 +4,63 @@ All notable changes to PSX2PSP Enhanced (Python Edition) are recorded here.
 
 ---
 
-## [Unreleased] — Python Edition v1.0.0
+## [1.1.0] — Patch / Mod / Translation System
+
+### Added — `modules/patches.py` (new module)
+- **IPS parser** — full spec: normal records, RLE records, truncation suffix
+- **BPS (Beat) parser** — variable-length encoding, all 4 commands (SourceRead,
+  TargetRead, SourceCopy, TargetCopy), CRC32 source + output verification
+- **xdelta3 support** — subprocess call to `xdelta3.exe`; auto-discovers binary
+  in `tools/xdelta3.exe` or system PATH
+- **ZIP dispatch** — automatically extracts first `.ips`/`.bps`/`.xdelta` file
+  from a ZIP archive and applies it
+- `detect_patch_format()` — magic-byte + extension detection
+- `patch_iso(iso, patch, out)` — unified entry point for all formats
+- `PatchCandidate` dataclass — source, title, URL, patch_type, author, local_path
+- **romhacking.net search** — scrapes Translations + Hacks pages for platform=6
+  (PlayStation), extracts detail page links, resolves direct download URL
+- **Archive.org search** — search API for `.ips`/`.bps`/`.xdelta` files in
+  audio/software items, per-item file listing
+- **PSX-Place search** — scrapes english-patch, ps1-patches, translation tag pages
+- `search_patches()` — unified multi-source search returning all candidates
+- `download_patch()` — download + cache by serial, auto-detect format
+- `apply_patches_to_iso()` — apply a list of PatchCandidates sequentially to disc 1
+
+### Added — GUI (`modules/gui.py`)
+- **`PatchPickDialog`** — full patch picker with:
+  - Source checkboxes (romhacking / archive / psxplace)
+  - Live search bar + threaded search
+  - Scrollable results list with source badge, format tag, title, author
+  - `🔗` button to open romhacking/psxplace page in browser
+  - Select All / None buttons
+  - Local patch file browse + add (`.ips`/`.bps`/`.xdelta`/`.zip`)
+  - Download & Apply Selected button (threaded download, then calls `result_cb`)
+- **`SingleGameTab`** — new `🩹 Patches / Mods` button + status label
+- **`SettingsTab`** — new "Patches / Mods / Translations" LabelFrame:
+  - "Auto-search for patches" checkbox
+  - Per-source checkboxes (romhacking.net / Archive.org / PSX-Place)
+  - xdelta3 info note
+- **`AboutTab`** — Patch Sources section listing all 3 sources + formats
+- `_check_deps()` now checks xdelta3 availability
+
+### Fixed — existing patch bugs
+- `BatchTab._start_all()` — now propagates `apply_patches` and `auto_search_patches`
+  from settings to each spec (was silently skipping patches in batch mode)
+- `converter.py _run_via_bridge()` — JSON spec now includes `apply_patches`
+  (bridge path was always patching with 0 patches regardless of setting)
+- `popstation_bridge.py run()` — now calls `_build_patch_array()` and passes
+  `patchCount`/`patchData` to the DLL when `apply_patches=True`
+
+### Changed — `modules/batch.py`
+- `GameSpec` gains: `patch_files`, `patch_sources`, `auto_search_patches`,
+  `patch_candidates` — all with safe `field(default_factory=list)` defaults
+- `Pipeline.run()` — step 3b inserts patch application between normalise and artwork
+- `Pipeline._step_apply_patches()` — handles local files, GUI-selected candidates,
+  and optional auto-search
+
+---
+
+## [1.0.0] — Python Edition Initial Release
 
 ### Added — Core Python rewrite
 - Full Python 3.9+ rewrite of the entire frontend and asset pipeline

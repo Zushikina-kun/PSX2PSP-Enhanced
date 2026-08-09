@@ -16,12 +16,12 @@ Built on top of the original PSX2PSP by KingSquitter, with a full Python rewrite
 
 | File | Size | SHA256 |
 |------|------|--------|
+| [PSX2PSP_Enhanced_v1.1.0_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest) | ~29 MB | *(see release page)* |
 | [PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/download/v1.0.0/PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip) | 29.1 MB | `D1CA28E5...350CB47` |
 
-1. Download the zip above from the [Releases page](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases)
+1. Download the latest zip from the [Releases page](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases)
 2. Extract it anywhere — keep all files in the same folder
 3. Double-click **`PSX2PSP_Enhanced.exe`** to launch the GUI
-   - Or use **`PSX2PSP_Enhanced.bat`** if you have Python installed (runs from source)
 
 > **Note:** `popstation.dll` (the PS1→PBP engine) is 32-bit. For PBP conversion you
 > need 32-bit Python — see the [popstation.dll requirement](#popstationdll--32-bit-requirement) section below.
@@ -39,7 +39,17 @@ Built on top of the original PSX2PSP by KingSquitter, with a full Python rewrite
 - PAL → NTSC patch support via `patches.ini`
 - Compression levels 0–9 (zlib)
 
-### Cover Art — 5 sources
+### Patches / Mods / Translations — 3 search sources
+
+| # | Source | Coverage |
+|---|--------|---------|
+| 1 | **romhacking.net** | Translations + Hacks (platform = PlayStation) |
+| 2 | **Archive.org** | Community patch collections (`.ips`/`.bps`/`.xdelta`) |
+| 3 | **PSX-Place** | Tag pages: english-patch, ps1-patches, translation |
+
+Supported patch formats: **IPS** · **BPS** (Beat, CRC32 verified) · **xdelta3** · **ZIP** (auto-extracts)
+
+Use the `🩹 Patches / Mods` button in the Single Game tab to search, preview, and apply patches before conversion. Local patch files (`.ips`/`.bps`/`.xdelta`/`.zip`) can be added directly.
 | # | Source | Key required |
 |---|--------|-------------|
 | 1 | **xlenore/psx-covers** (GitHub raw, serial-based) | No |

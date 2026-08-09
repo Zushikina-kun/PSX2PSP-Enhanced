@@ -146,6 +146,22 @@ def run(spec: dict) -> bool:
 
     dll = ctypes.cdll.LoadLibrary(POPSTATION_DLL)
 
+    # If patches requested, build the patch array from the ISO
+    patch_count = 0
+    patch_array = None
+    patch_arr_ref = None   # keep alive during DLL call
+    if spec.get("apply_patches", False):
+        try:
+            sys.path.insert(0, _THIS_DIR)
+            from modules.converter import _build_patch_array
+            patch_count, patch_arr_ref = _build_patch_array(
+                spec.get("iso_path", ""), None)
+            if patch_arr_ref is not None:
+                patch_array = ctypes.cast(patch_arr_ref, ctypes.c_void_p)
+            _log(f"Patches: {patch_count} byte replacements queued.")
+        except Exception as e:
+            _log(f"Patch build warning: {e}")
+
     info            = ConvertIsoInfo()
     info.callback   = _hwnd
     info.base       = _enc(BASE_PBP)
@@ -164,8 +180,8 @@ def run(spec: dict) -> bool:
     info.gameID     = _enc(spec.get("game_id", ""))
     info.saveID     = _enc(spec.get("save_id", ""))
     info.compLevel  = int(spec.get("comp_level", 9))
-    info.patchCount = 0
-    info.patchData  = None
+    info.patchCount = patch_count
+    info.patchData  = patch_array
 
     _log(f"Calling popstation.dll convert() …")
     threading.Thread(target=dll.convert, args=(ctypes.byref(info),), daemon=True).start()
