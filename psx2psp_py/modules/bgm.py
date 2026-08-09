@@ -459,22 +459,44 @@ def _ytdlp_download_candidate(candidate: BgmCandidate, dest_mp3: str,
     def _log(m): progress_cb and progress_cb(m)
     url      = candidate.direct_url
     tmp_base = dest_mp3.replace(".mp3", "_ytdl")
+
+    # When ffmpeg is available: download best audio and convert to mp3.
+    # When ffmpeg is absent: restrict to formats lame can decode (mp3, wav).
+    # m4a works with a direct rename trick via mutagen if needed.
+    if _ffmpeg_available():
+        fmt = "bestaudio/best"
+        postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
+                     "preferredquality": "192"}]
+    else:
+        # Only download formats that lame --decode can handle natively
+        fmt = "bestaudio[ext=mp3]/worstvideo[ext=mp3]/bestaudio[ext=m4a]/bestaudio"
+        postproc = []
+
     ydl_opts = {
-        "format": "bestaudio[ext=mp3]/bestaudio/best",
-        "outtmpl": tmp_base + ".%(ext)s",
-        "noplaylist": True, "quiet": True, "no_warnings": True,
-        "socket_timeout": 30, "extractor_retries": 2,
-        "postprocessors": ([{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}]
-                           if _ffmpeg_available() else []),
+        "format":          fmt,
+        "outtmpl":         tmp_base + ".%(ext)s",
+        "noplaylist":      True,
+        "quiet":           True,
+        "no_warnings":     True,
+        "socket_timeout":  30,
+        "extractor_retries": 2,
+        "postprocessors":  postproc,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        for ext in ("mp3", "webm", "m4a", "opus", "ogg"):
+        # Find the downloaded file — prefer mp3 first
+        for ext in ("mp3", "m4a", "wav", "webm", "opus", "ogg"):
             cand = tmp_base + "." + ext
             if os.path.isfile(cand) and os.path.getsize(cand) > 50_000:
+                if ext in ("webm", "opus", "ogg") and not _ffmpeg_available():
+                    _log(f"YouTube: got {ext.upper()} but ffmpeg not available "
+                         f"for conversion — skipping.")
+                    os.unlink(cand)
+                    return False
                 shutil.move(cand, dest_mp3)
-                _log(f"YouTube: downloaded {os.path.getsize(dest_mp3)//1024} KB")
+                _log(f"YouTube: downloaded {os.path.getsize(dest_mp3)//1024} KB "
+                     f"({ext.upper()})")
                 return True
     except Exception as e:
         _log(f"YouTube download error: {e}")
@@ -541,33 +563,95 @@ def _wav_to_at3(wav: str, at3: str, bitrate: int = AT3_BITRATE, loop: bool = Tru
     return _run(cmd, cwd=str(ROOT_DIR), timeout=180)
 
 
+def _get_audio_ext(path: str) -> str:
+    """
+    Detect actual audio format by magic bytes, not just extension.
+    Returns lowercase extension: 'mp3', 'ogg', 'flac', 'm4a', 'wav', 'webm', etc.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+    except OSError:
+        return os.path.splitext(path)[1].lower().lstrip(".")
+
+    if header[:3] == b"\xff\xfb" or header[:3] == b"\xff\xf3" or header[:3] == b"\xff\xf2":
+        return "mp3"
+    if header[:3] == b"ID3":
+        return "mp3"
+    if header[:4] == b"fLaC":
+        return "flac"
+    if header[:4] == b"OggS":
+        return "ogg"
+    if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
+        return "wav"
+    if header[4:8] == b"ftyp":
+        return "m4a"
+    if header[:4] == b"\x1a\x45\xdf\xa3":
+        return "webm"
+    # Fall back to extension
+    return os.path.splitext(path)[1].lower().lstrip(".") or "mp3"
+
+
 def _to_at3(audio: str, at3: str, loop: bool = True,
             progress_cb: Optional[Callable[[str], None]] = None) -> bool:
-    """Convert any local audio file to AT3."""
+    """
+    Convert any local audio file to AT3.
+    Uses magic-byte detection so renamed files (e.g. .mp3 that is really webm)
+    are handled correctly.
+    """
     def _log(m): progress_cb and progress_cb(m)
-    ext = os.path.splitext(audio)[1].lower()
+
+    actual_ext = _get_audio_ext(audio)
+    _log(f"Audio format detected: {actual_ext.upper()}")
+
     with tempfile.TemporaryDirectory(prefix="psx2psp_at3_") as tmp:
         wav = os.path.join(tmp, "ready.wav")
-        if ext == ".wav":
-            _log("Resampling WAV…")
+
+        if actual_ext == "wav":
+            _log("Resampling WAV to 44100/16/stereo…")
             ok = _ensure_wav_format(audio, wav)
-        elif ext == ".mp3" and not _ffmpeg_available() and _lame_available():
-            _log("Decoding MP3 → WAV via lame…")
-            ok = _mp3_to_wav(audio, wav)
-        else:
-            _log(f"Converting {ext.upper()} → WAV…")
-            ok = _audio_to_wav(audio, wav)
-            if not ok and ext == ".mp3" and _lame_available():
+
+        elif actual_ext == "mp3":
+            if _ffmpeg_available():
+                _log("Converting MP3 → WAV via ffmpeg…")
+                ok = _audio_to_wav(audio, wav)
+            elif _lame_available():
+                _log("Decoding MP3 → WAV via lame…")
                 ok = _mp3_to_wav(audio, wav)
+            else:
+                _log("No MP3 decoder available (need lame or ffmpeg).")
+                ok = False
+
+        elif actual_ext in ("ogg", "flac", "webm", "opus", "m4a"):
+            if _ffmpeg_available():
+                _log(f"Converting {actual_ext.upper()} → WAV via ffmpeg…")
+                ok = _audio_to_wav(audio, wav)
+            else:
+                _log(f"{actual_ext.upper()} requires ffmpeg for conversion. "
+                     f"Install ffmpeg or use an MP3 file instead.")
+                ok = False
+
+        else:
+            # Unknown format — try ffmpeg first, then lame as last resort
+            if _ffmpeg_available():
+                _log(f"Converting unknown format → WAV via ffmpeg…")
+                ok = _audio_to_wav(audio, wav)
+            elif _lame_available():
+                _log("Trying lame decode on unknown format…")
+                ok = _mp3_to_wav(audio, wav)
+            else:
+                ok = False
+
         if not ok or not os.path.isfile(wav):
-            _log("WAV conversion failed; trying directly…")
-            wav = audio
+            _log("WAV conversion failed — cannot produce AT3.")
+            return False
+
         _log(f"Encoding → AT3 ({AT3_BITRATE} kbps)…")
         ok = _wav_to_at3(wav, at3, bitrate=AT3_BITRATE, loop=loop)
         if ok:
             _log(f"AT3 ready: {os.path.basename(at3)}")
         else:
-            _log("AT3 encoding failed.")
+            _log("AT3 encoding failed (check at3tool.exe path).")
         return ok
 
 
