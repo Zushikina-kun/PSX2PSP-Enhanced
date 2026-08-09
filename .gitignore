@@ -20,6 +20,11 @@ psx2psp_py/cache/
 psx2psp_py/output/
 psx2psp_py/assets/
 
+# Build artefacts (EXE, PyInstaller work dirs)
+dist/
+build/
+*.spec.bak
+
 # Keep directory stubs
 !psx2psp_py/cache/.gitkeep
 !psx2psp_py/output/.gitkeep

@@ -56,7 +56,7 @@ class GameSpec:
     fetch_artwork: bool = True
     fetch_bgm:     bool = True
     loop_bgm:      bool = True
-    bgm_sources:   list = None   # None = use default order (khinsider, archive, youtube)
+    bgm_sources:   Optional[list] = None  # None = use default order (khinsider, archive, youtube)
 
 
 @dataclass

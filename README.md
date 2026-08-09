@@ -1,8 +1,30 @@
 # PSX2PSP Enhanced — Python Edition
 
+[![Release](https://img.shields.io/github/v/release/Zushikina-kun/PSX2PSP-Enhanced?label=Download&color=brightgreen)](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://python.org)
+
 A comprehensive PS1 → PSP (EBOOT.PBP) conversion tool with automatic cover art search, screenshot search, BGM/soundtrack download, and ATRAC3 audio conversion.
 
 Built on top of the original PSX2PSP by KingSquitter, with a full Python rewrite of the frontend, asset pipeline, and search/download systems.
+
+---
+
+## Download
+
+### Pre-built Windows EXE (no Python needed)
+
+| File | Size | SHA256 |
+|------|------|--------|
+| [PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/download/v1.0.0/PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip) | 29.1 MB | `D1CA28E5...350CB47` |
+
+1. Download the zip above from the [Releases page](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases)
+2. Extract it anywhere — keep all files in the same folder
+3. Double-click **`PSX2PSP_Enhanced.exe`** to launch the GUI
+   - Or use **`PSX2PSP_Enhanced.bat`** if you have Python installed (runs from source)
+
+> **Note:** `popstation.dll` (the PS1→PBP engine) is 32-bit. For PBP conversion you
+> need 32-bit Python — see the [popstation.dll requirement](#popstationdll--32-bit-requirement) section below.
 
 ---
 
@@ -112,6 +134,11 @@ Alternatively, just use the bundled **PSX2PSP.exe** for the conversion step afte
 
 ## Setup
 
+### Option A — Pre-built EXE (recommended)
+Download and extract the [latest release](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest). Run `PSX2PSP_Enhanced.exe`.
+
+### Option B — Run from source (requires Python 3.9+)
+
 ```bash
 # 1. Clone or download
 git clone https://github.com/Zushikina-kun/PSX2PSP-Enhanced.git
@@ -208,6 +235,35 @@ PSX2PSP-Enhanced/
 | ffmpeg not bundled — non-MP3 BGM formats won't decode without it | Install ffmpeg from https://ffmpeg.org/download.html |
 | ICON1.PMF (animated icon video) not encoded — preview GIF only | Convert preview GIF → PMF with ffmpeg + Sony PMF tools if needed |
 | Screenshot fetch depends on Libretro/PSX Data Center availability | Supply a custom screenshot via the asset override field |
+
+---
+
+## Building from Source
+
+Requires Python 3.9+, PyInstaller, and UPX for maximum compression.
+
+```bash
+# 1. Install build dependencies
+pip install pyinstaller pillow requests yt-dlp tqdm mutagen
+
+# 2. Download UPX (optional but recommended — shrinks EXE by ~40%)
+#    https://github.com/upx/upx/releases/latest
+#    Extract upx.exe and add its folder to PATH
+
+# 3. Build (run from the project root)
+python -m PyInstaller psx2psp_py/psx2psp_enhanced.spec ^
+    --distpath dist --workpath build/pyinstaller --clean --noconfirm
+```
+
+Output: `dist/PSX2PSP_Enhanced.exe` (~28 MB single-file, UPX compressed)
+
+Build environment used for official releases:
+| Component | Version |
+|-----------|---------|
+| Python | 3.14.6 (64-bit) |
+| PyInstaller | 6.21.0 |
+| UPX | 5.2.0 |
+| Platform | Windows 11 x64 |
 
 ---
 

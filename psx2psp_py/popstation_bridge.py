@@ -3,7 +3,7 @@
 popstation_bridge.py — 32-bit subprocess bridge for popstation.dll
 
 Run this script with a 32-bit Python interpreter:
-    C:\Python312-32\python.exe popstation_bridge.py
+    C:\\Python312-32\\python.exe popstation_bridge.py
 
 It reads a JSON job spec from stdin, calls popstation.dll via ctypes,
 and writes progress + result back to stdout as JSON lines.
@@ -12,7 +12,7 @@ Stdin:  one JSON line with keys matching ConversionJob.__init__ params
 Stdout: JSON lines: {"type": "log"|"progress"|"done", ...}
 
 Usage from the main app (set PYTHON32 env var):
-    set PYTHON32=C:\Python312-32\python.exe
+    set PYTHON32=C:\\Python312-32\\python.exe
 """
 import sys
 import os
