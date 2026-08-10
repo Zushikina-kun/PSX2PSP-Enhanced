@@ -24,7 +24,7 @@ from typing import Optional, Callable, List, Tuple
 
 from .constants import (
     POPSTATION_DLL, BASE_PBP, DATA_PSP, POCKETISO_EXE,
-    PATCHES_INI, SETTINGS_INI, DEFAULT_COMPRESS,
+    PATCHES_INI, SETTINGS_INI, DEFAULT_COMPRESS, PSX2PSP_EXE,
 )
 
 # ── 32-bit Python detection ───────────────────────────────────────────────────
@@ -605,6 +605,89 @@ class ConversionJob:
                 log_cb(f"Bridge launch failed: {e}")
             return False
 
+    def _run_via_psx2psp_exe(self,
+                              log_cb:      Optional[Callable[[str], None]],
+                              total_cb:    Optional[Callable[[int], None]],
+                              progress_cb: Optional[Callable[[int], None]]) -> bool:
+        """
+        Last-resort fallback: call PSX2PSP.exe via /batch mode.
+        Writes a minimal ini, launches PSX2PSP.exe /batch, waits for the PBP.
+        Returns True if the output PBP was created.
+        """
+        if not os.path.isfile(PSX2PSP_EXE):
+            if log_cb:
+                log_cb(f"PSX2PSP.exe not found at: {PSX2PSP_EXE}")
+            return False
+        if log_cb:
+            log_cb(f"Trying PSX2PSP.exe fallback: {PSX2PSP_EXE}")
+
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg["Settings"] = {
+            "Iso":       self.iso_paths[0] if self.iso_paths else "",
+            "OutFolder": os.path.dirname(self.output_pbp),
+            "GameTitle": self.game_title,
+            "SaveTitle": self.save_title,
+            "GameID":    self.game_id,
+            "SaveID":    self.save_id,
+            "Compress":  str(self.comp_level),
+            "Icon0":     self.icon0_path or "",
+            "Pic1":      self.pic1_path  or "",
+            "Snd0":      self.snd0_path  or "",
+        }
+        ini_path = os.path.join(os.path.dirname(PSX2PSP_EXE), "_psx2psp_batch.ini")
+        try:
+            with open(ini_path, "w", encoding="utf-8") as f:
+                cfg.write(f)
+        except Exception as e:
+            if log_cb:
+                log_cb(f"Could not write batch ini: {e}")
+            return False
+
+        try:
+            cmd_str = f'"{PSX2PSP_EXE}" /batch "{ini_path}"'
+            result = subprocess.run(
+                cmd_str, shell=True,
+                cwd=os.path.dirname(PSX2PSP_EXE),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=600)
+            if log_cb:
+                log_cb(f"PSX2PSP.exe exited: {result.returncode}")
+
+            if os.path.isfile(self.output_pbp):
+                if log_cb:
+                    log_cb(f"Conversion complete → {self.output_pbp}")
+                return True
+
+            # PBP may have a slightly different name — scan the output folder
+            out_dir = os.path.dirname(self.output_pbp)
+            pbps = [f for f in os.listdir(out_dir) if f.lower().endswith(".pbp")]
+            if pbps:
+                found = os.path.join(out_dir, pbps[0])
+                if found != self.output_pbp:
+                    os.replace(found, self.output_pbp)
+                if log_cb:
+                    log_cb(f"Conversion complete → {self.output_pbp}")
+                return True
+
+            if log_cb:
+                log_cb("PSX2PSP.exe did not produce a PBP.")
+            return False
+        except subprocess.TimeoutExpired:
+            if log_cb:
+                log_cb("PSX2PSP.exe timed out after 600 s.")
+            return False
+        except Exception as e:
+            if log_cb:
+                log_cb(f"PSX2PSP.exe error: {e}")
+            return False
+        finally:
+            try:
+                os.unlink(ini_path)
+            except Exception:
+                pass
+
     def cancel(self):
         self._cancel_flag.set()
         try:
@@ -644,30 +727,38 @@ class ConversionJob:
         _log(f"Loading popstation.dll…")
         try:
             dll = _load_dll()
-        except OSError as e:
+        except (OSError, Exception) as e:
             err = str(e)
-            if "193" in err or "not a valid Win32 application" in err.lower():
-                # 32-bit DLL / 64-bit Python mismatch — try the bridge
+            is_32bit_error = (
+                "193" in err
+                or "not a valid Win32 application" in err.lower()
+                or "dynlib/dll" in err.lower()          # PyInstaller frozen error
+                or "not found when the application was frozen" in err.lower()
+            )
+            if is_32bit_error:
+                # Try 32-bit Python bridge first
                 _log("popstation.dll is 32-bit; attempting bridge via 32-bit Python…")
                 ok = self._run_via_bridge(log_cb, total_size_cb, progress_cb)
                 if ok:
                     return True
-                # Bridge also failed — give a clear instruction
+                # Bridge failed — try PSX2PSP.exe subprocess fallback
+                _log("Bridge failed; trying PSX2PSP.exe subprocess fallback…")
+                ok = self._run_via_psx2psp_exe(log_cb, total_size_cb, progress_cb)
+                if ok:
+                    return True
+                # All fallbacks exhausted
                 self._error_msg = (
                     "popstation.dll requires 32-bit Python.\n"
-                    "Install 32-bit Python 3.x from https://python.org/downloads/\n"
-                    "then set the PYTHON32 environment variable:\n"
-                    "  set PYTHON32=C:\\Python312-32\\python.exe\n"
-                    "Alternatively, use the original PSX2PSP.exe for conversion."
+                    "Option 1 (recommended): Install 32-bit Python 3.x from\n"
+                    "  https://www.python.org/downloads/\n"
+                    "  then set:  PYTHON32=C:\\Python312-32\\python.exe\n"
+                    "Option 2: Use the original PSX2PSP.exe (place it next to\n"
+                    "  PSX2PSP_Enhanced.exe) — the app will call it automatically."
                 )
                 _log(self._error_msg)
             else:
                 self._error_msg = err
                 _log(self._error_msg)
-            return False
-        except Exception as e:
-            self._error_msg = str(e)
-            _log(self._error_msg)
             return False
 
         # Set up message callback window

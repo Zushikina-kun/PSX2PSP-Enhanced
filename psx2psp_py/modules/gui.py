@@ -699,6 +699,14 @@ class SingleGameTab(ttk.Frame):
         self._prog_var.set(0)
         self._prog_lbl.set("Starting…")
 
+        # ── If BGM fetch is enabled and no track pre-selected, show picker ───
+        if spec.fetch_bgm and not spec.custom_snd0:
+            self._log.append(
+                "Tip: click '🎵 Fetch BGM' first to pick a specific track. "
+                "Auto-picking best match now…")
+        elif spec.fetch_bgm and spec.custom_snd0:
+            self._log.append(f"Using pre-selected BGM: {os.path.basename(spec.custom_snd0)}")
+
         def _on_progress(msg, done, total):
             self.after(0, lambda: self._set_progress(msg, done, total))
             self.after(0, lambda: self._log.append(msg))
@@ -718,6 +726,18 @@ class SingleGameTab(ttk.Frame):
                 self.after(0, lambda: self._prog_lbl.set("Failed"))
                 self.after(0, lambda: self._preview.set_info(
                     spec.game_title, spec.serial, spec.video_format, "Failed!"))
+                # If it's the 32-bit DLL error, show a clear dialog
+                if "32-bit" in result.error_msg or "PYTHON32" in result.error_msg:
+                    self.after(0, lambda: messagebox.showwarning(
+                        "32-bit Python Required",
+                        "popstation.dll is a 32-bit DLL.\n\n"
+                        "To convert PBP files, install 32-bit Python 3.x:\n"
+                        "  https://www.python.org/downloads/\n"
+                        "  (choose 'Windows installer (32-bit)')\n\n"
+                        "Then set the environment variable:\n"
+                        "  PYTHON32=C:\\Python312-32\\python.exe\n\n"
+                        "Or place PSX2PSP.exe next to this app — it will be\n"
+                        "used automatically as a fallback."))
             self.after(0, lambda: self._log.append(msg))
 
         self._runner = BatchRunner(
@@ -1887,7 +1907,27 @@ class BgmPickDialog(tk.Toplevel):
         path = self._preview_path
         if not path or not os.path.isfile(path):
             return
-        ok = self._player.load(path)
+
+        # Detect actual format — if not MP3/WAV, try converting to WAV for playback
+        from .bgm import _get_audio_ext, _ffmpeg_available, _lame_available
+        ext = _get_audio_ext(path)
+        playable_path = path
+
+        if ext not in ("mp3", "wav") and _ffmpeg_available():
+            import tempfile
+            wav = os.path.join(self._preview_dir or tempfile.gettempdir(), "preview_conv.wav")
+            try:
+                import subprocess
+                result = subprocess.run(
+                    f'ffmpeg -y -i "{path}" -ar 44100 -ac 2 -sample_fmt s16 "{wav}"',
+                    shell=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                if result.returncode == 0 and os.path.isfile(wav):
+                    playable_path = wav
+            except Exception:
+                pass
+
+        ok = self._player.load(playable_path)
         if ok:
             dur = self._player.duration()
             self._now_playing.set(
@@ -1901,7 +1941,7 @@ class BgmPickDialog(tk.Toplevel):
                 text="▶ Playing in-app. Pick this track or select another.",
                 foreground=CLR_GREEN)
         else:
-            # pygame unavailable — fall back to system player
+            # pygame unavailable or unsupported format — fall back to system player
             try:
                 if sys.platform == "win32":
                     os.startfile(path)
