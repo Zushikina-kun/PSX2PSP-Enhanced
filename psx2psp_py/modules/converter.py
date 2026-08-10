@@ -725,6 +725,30 @@ class ConversionJob:
                     exist_ok=True)
 
         _log(f"Loading popstation.dll…")
+
+        # In a frozen (PyInstaller) EXE, ctypes cannot load a 32-bit DLL
+        # because Python 64-bit cannot load a 32-bit PE — and PyInstaller
+        # intercepts the call differently than regular Python.
+        # Skip ctypes entirely when frozen and go straight to the fallbacks.
+        if getattr(sys, "frozen", False):
+            _log("Frozen EXE detected — using bridge/PSX2PSP.exe for conversion…")
+            ok = self._run_via_bridge(log_cb, total_size_cb, progress_cb)
+            if ok:
+                return True
+            _log("Bridge failed; trying PSX2PSP.exe subprocess fallback…")
+            ok = self._run_via_psx2psp_exe(log_cb, total_size_cb, progress_cb)
+            if ok:
+                return True
+            self._error_msg = (
+                "popstation.dll requires 32-bit Python for the bridge to work.\n"
+                "Option 1: Install 32-bit Python 3.x from https://python.org/downloads/\n"
+                "  then set:  PYTHON32=C:\\Python312-32\\python.exe\n"
+                "Option 2: PSX2PSP.exe is included — it will handle conversion.\n"
+                "  Make sure PSX2PSP.exe is next to PSX2PSP_Enhanced.exe."
+            )
+            _log(self._error_msg)
+            return False
+
         try:
             dll = _load_dll()
         except (OSError, Exception) as e:

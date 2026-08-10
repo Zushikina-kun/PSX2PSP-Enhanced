@@ -1002,11 +1002,28 @@ def convert_to_at3(
     progress_cb: Optional[Callable[[str], None]] = None,
     loop: bool = True,
 ) -> bool:
-    """Convert a local audio file to SND0.AT3."""
+    """Convert a local audio file to SND0.AT3.
+    If the source is already an .at3 file it is copied directly.
+    """
     if not os.path.isfile(source_audio):
         if progress_cb:
             progress_cb(f"Source not found: {source_audio}")
         return False
+
+    # Already AT3 — just copy it
+    if os.path.splitext(source_audio)[1].lower() == ".at3":
+        if progress_cb:
+            progress_cb(f"Source is already AT3, copying directly…")
+        try:
+            shutil.copy2(source_audio, at3_path)
+            if progress_cb:
+                progress_cb(f"AT3 ready: {os.path.basename(at3_path)}")
+            return True
+        except Exception as e:
+            if progress_cb:
+                progress_cb(f"Copy failed: {e}")
+            return False
+
     if not _at3tool_available():
         if progress_cb:
             progress_cb("at3tool.exe not found.")

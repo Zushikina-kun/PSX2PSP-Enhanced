@@ -192,6 +192,13 @@ class Pipeline:
         at3out = os.path.join(tmp, "SND0.AT3")
 
         if spec.custom_snd0 and os.path.isfile(spec.custom_snd0):
+            ext = os.path.splitext(spec.custom_snd0)[1].lower()
+            if ext == ".at3":
+                # Already AT3 — just copy directly, no re-encoding needed
+                import shutil
+                self._log(f"Using AT3 directly: {os.path.basename(spec.custom_snd0)}")
+                shutil.copy2(spec.custom_snd0, at3out)
+                return at3out
             from .bgm import convert_to_at3
             self._log(f"Converting custom BGM: {os.path.basename(spec.custom_snd0)}…")
             ok = convert_to_at3(spec.custom_snd0, at3out, self._log, spec.loop_bgm)
