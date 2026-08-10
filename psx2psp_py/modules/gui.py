@@ -1628,28 +1628,36 @@ class PatchPickDialog(tk.Toplevel):
 
 class BgmPickDialog(tk.Toplevel):
     """
-    BGM picker — album list (left) + track list (right, auto-loaded on selection).
-    Features:
-      - Album selected → tracks load automatically in background
-      - ▶ Preview button streams/plays selected track in system default player
-      - Track duration shown alongside name
-      - Cancel cleans up any temp preview file
+    BGM picker with built-in in-app audio player (pygame-ce).
+
+    Layout:
+      Top    — album list (left) | track list (right)
+      Middle — player: progress bar + time + play/pause/stop + volume
+      Bottom — status + Use Selected / Cancel
     """
 
     def __init__(self, parent, candidates: list, result_cb):
         super().__init__(parent)
         self.title("Select BGM Track")
         self.configure(bg=CLR_BG)
-        self.geometry("780x500")
+        self.geometry("820x580")
         self.resizable(True, True)
         self._candidates   = candidates
         self._result_cb    = result_cb
-        self._tracks:  list = []        # [(display_name, path)] for current album
-        self._preview_path = ""         # temp file for playback
+        self._tracks:  list = []
+        self._preview_path = ""
+        self._preview_dir  = ""
         self._loading      = False
+        self._poll_job     = None
+
+        from .bgm import AudioPlayer, _pygame_available
+        self._player     = AudioPlayer()
+        self._has_pygame = _pygame_available()
+
         self._build()
         self.grab_set()
-        # Auto-select first KHI candidate if present
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
         for i, c in enumerate(self._candidates):
             if c.source == "khinsider":
                 self._album_list.selection_set(i)
@@ -1659,66 +1667,102 @@ class BgmPickDialog(tk.Toplevel):
 
     def _build(self):
         top = ttk.Frame(self)
-        top.pack(fill="both", expand=True, padx=8, pady=6)
+        top.pack(fill="both", expand=True, padx=8, pady=(6, 0))
 
         # ── Left: album list ──────────────────────────────────────────────────
         left = ttk.LabelFrame(top, text=" Albums / Sources ")
         left.pack(side="left", fill="both", expand=True, padx=(0, 4))
-
         self._album_list = tk.Listbox(
             left, bg=CLR_PANEL, fg=CLR_FG,
             selectbackground=CLR_HILIGHT, font=FONT_SMALL,
-            activestyle="none", height=18)
+            activestyle="none", height=13)
         sb1 = ttk.Scrollbar(left, command=self._album_list.yview)
         self._album_list.configure(yscrollcommand=sb1.set)
         self._album_list.pack(side="left", fill="both", expand=True, padx=2, pady=2)
         sb1.pack(side="right", fill="y")
         self._album_list.bind("<<ListboxSelect>>", self._on_album_select)
-
         for c in self._candidates:
-            src_tag = f"[{c.source[:7]}]"
-            self._album_list.insert("end", f"{src_tag}  {c.title[:46]}")
+            label = f"[{c.source[:7]}]  {c.title[:38]}"
             if c.year:
-                self._album_list.insert("end", f"          ({c.year}  {c.platform})")
-                # Remove the extra line — just put it all on one
-                self._album_list.delete("end")
-                self._album_list.insert("end",
-                    f"{src_tag}  {c.title[:38]}  {c.year}")
+                label += f"  {c.year}"
+            self._album_list.insert("end", label)
 
         # ── Right: track list ─────────────────────────────────────────────────
-        right = ttk.LabelFrame(top, text=" Tracks  (click album to load) ")
+        right = ttk.LabelFrame(top, text=" Tracks  (double-click = preview) ")
         right.pack(side="right", fill="both", expand=True, padx=(4, 0))
-
         self._track_list = tk.Listbox(
             right, bg=CLR_PANEL, fg=CLR_FG,
             selectbackground=CLR_HILIGHT, font=FONT_SMALL,
-            activestyle="none", height=18)
+            activestyle="none", height=13)
         sb2 = ttk.Scrollbar(right, command=self._track_list.yview)
         self._track_list.configure(yscrollcommand=sb2.set)
         self._track_list.pack(side="left", fill="both", expand=True, padx=2, pady=2)
         sb2.pack(side="right", fill="y")
-        self._track_list.bind("<Double-Button-1>", lambda e: self._preview_track())
+        self._track_list.bind("<Double-Button-1>",
+                               lambda e: self._preview_track())
 
-        # ── Status bar ────────────────────────────────────────────────────────
+        # ── Player panel ──────────────────────────────────────────────────────
+        pf = ttk.LabelFrame(self, text=" Now Playing ")
+        pf.pack(fill="x", padx=8, pady=(4, 0))
+
+        self._now_playing = tk.StringVar(value="— no track loaded —")
+        ttk.Label(pf, textvariable=self._now_playing,
+                  foreground=CLR_FG2, font=FONT_SMALL,
+                  wraplength=700).pack(anchor="w", padx=8, pady=(4, 0))
+
+        # Seek bar + time
+        row1 = ttk.Frame(pf)
+        row1.pack(fill="x", padx=8, pady=2)
+        self._time_lbl = ttk.Label(row1, text="0:00 / 0:00",
+                                    font=FONT_SMALL, foreground=CLR_FG2, width=14)
+        self._time_lbl.pack(side="right")
+        self._prog_var = tk.DoubleVar(value=0)
+        self._prog_bar = ttk.Scale(row1, variable=self._prog_var,
+                                    from_=0, to=100, orient="horizontal",
+                                    command=self._on_seek)
+        self._prog_bar.pack(side="left", fill="x", expand=True)
+
+        # Buttons + volume
+        row2 = ttk.Frame(pf)
+        row2.pack(fill="x", padx=8, pady=(0, 4))
+        self._play_btn = _btn(row2, "▶  Play",  self._player_play,  width=8)
+        self._play_btn.pack(side="left", padx=2)
+        _btn(row2, "⏸  Pause", self._player_pause, width=8).pack(side="left", padx=2)
+        _btn(row2, "⏹  Stop",  self._player_stop,  width=8).pack(side="left", padx=2)
+        ttk.Separator(row2, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Label(row2, text="Vol:", font=FONT_SMALL,
+                  foreground=CLR_FG2).pack(side="left")
+        self._vol_var = tk.IntVar(value=80)
+        ttk.Scale(row2, variable=self._vol_var, from_=0, to=100,
+                  orient="horizontal", length=100,
+                  command=lambda v: self._player.set_volume(
+                      float(v) / 100)).pack(side="left", padx=4)
+        if not self._has_pygame:
+            ttk.Label(pf,
+                      text="⚠  Install pygame-ce for in-app playback:  "
+                           "pip install pygame-ce",
+                      foreground=CLR_ORANGE,
+                      font=FONT_SMALL).pack(anchor="w", padx=8, pady=(0, 4))
+
+        # ── Status + action buttons ───────────────────────────────────────────
         self._status = ttk.Label(
             self,
             text="Select an album — tracks load automatically. "
                  "Double-click a track to preview.",
-            foreground=CLR_FG2, font=FONT_SMALL, wraplength=740)
-        self._status.pack(fill="x", padx=10, pady=(0, 2))
+            foreground=CLR_FG2, font=FONT_SMALL, wraplength=760)
+        self._status.pack(fill="x", padx=10, pady=(4, 0))
 
-        # ── Buttons ───────────────────────────────────────────────────────────
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=8, pady=6)
-
         _btn(btns, "✔  Use Selected",
              self._confirm, style="Accent.TButton").pack(side="right", padx=4)
         _btn(btns, "✖  Cancel", self._cancel).pack(side="right")
-        self._preview_btn = _btn(btns, "▶  Preview Track", self._preview_track)
+        self._preview_btn = _btn(btns, "⬇  Download & Preview",
+                                  self._preview_track)
         self._preview_btn.pack(side="left", padx=4)
         _btn(btns, "🔄  Reload", self._load_tracks).pack(side="left", padx=2)
 
-    # ── Album selection → auto-load tracks ───────────────────────────────────
+    # ── Album / track loading ─────────────────────────────────────────────────
 
     def _on_album_select(self, _event=None):
         if self._loading:
@@ -1728,30 +1772,27 @@ class BgmPickDialog(tk.Toplevel):
             return
         c = self._candidates[sel[0]]
         self._status.configure(
-            text=f"Loading tracks for: {c.title[:60]}…",
+            text=f"Loading tracks: {c.title[:60]}…",
             foreground=CLR_ORANGE)
+        self._player_stop()
         self._load_tracks()
 
     def _load_tracks(self):
         sel = self._album_list.curselection()
         if not sel:
-            self._status.configure(
-                text="Select an album first.", foreground=CLR_FG2)
+            self._status.configure(text="Select an album first.", foreground=CLR_FG2)
             return
         c = self._candidates[sel[0]]
 
         if c.source != "khinsider":
-            # Non-KHI: no individual track list — show a single "Use this" entry
             self._tracks = []
             self._track_list.delete(0, "end")
             self._track_list.insert("end", "(auto-pick best match)")
-            self._track_list.insert("end", f"Source: {c.source}")
-            self._track_list.insert("end", f"Title:  {c.title}")
-            if hasattr(c, "direct_url") and c.direct_url:
-                self._track_list.insert("end", "(stream URL available)")
+            self._track_list.insert("end", f"Source:  {c.source}")
+            self._track_list.insert("end", f"Title:   {c.title}")
             self._status.configure(
-                text=f"Archive.org / YouTube: no per-track list. "
-                     f"Click 'Use Selected' to download best match.",
+                text="Archive.org / YouTube: no per-track list. "
+                     "Click 'Download & Preview' or 'Use Selected'.",
                 foreground=CLR_FG2)
             return
 
@@ -1775,119 +1816,189 @@ class BgmPickDialog(tk.Toplevel):
         for i, (name, _path) in enumerate(tracks, 1):
             import urllib.parse
             disp = urllib.parse.unquote(name).replace("%20", " ").replace("+", " ")
-            # Strip leading number if present (KHI already numbers them)
             self._track_list.insert("end", f"  {i:02d}.  {disp}")
         n = len(tracks)
         self._status.configure(
             text=f"{n} track{'s' if n != 1 else ''} loaded. "
-                 "Select one (or leave on ★ for auto-pick). "
-                 "Double-click to preview.",
+                 "Double-click to preview in-app.",
             foreground=CLR_GREEN)
 
-    # ── Preview ───────────────────────────────────────────────────────────────
+    # ── Preview / download ────────────────────────────────────────────────────
 
     def _preview_track(self):
-        """Download the selected track to a temp file and play it."""
+        """Download selected track and load into the in-app player."""
         sel_album = self._album_list.curselection()
         if not sel_album:
-            self._status.configure(
-                text="Select an album first.", foreground=CLR_RED)
+            self._status.configure(text="Select an album first.", foreground=CLR_RED)
             return
-
         c         = self._candidates[sel_album[0]]
         track_sel = self._track_list.curselection()
-        # track_sel index: 0 = auto, 1..N = track 1..N
         track_idx = track_sel[0] if track_sel else 0
 
-        self._status.configure(
-            text="Downloading preview track…", foreground=CLR_ORANGE)
+        # Re-use cached preview if same track
+        if self._preview_path and os.path.isfile(self._preview_path):
+            self._load_and_play()
+            return
+
+        self._status.configure(text="Downloading preview…", foreground=CLR_ORANGE)
         self._preview_btn.configure(state="disabled")
         self.update_idletasks()
 
         def _work():
-            import tempfile, os, urllib.parse
-            from .bgm import (_khi_download_candidate, _archive_download_candidate,
-                              _ytdlp_download_candidate, _stream_download)
-
-            tmp   = tempfile.mkdtemp(prefix="psx2psp_prev_")
-            dest  = os.path.join(tmp, "preview.mp3")
-
+            import tempfile
+            from .bgm import (_khi_download_candidate,
+                              _archive_download_candidate,
+                              _ytdlp_download_candidate)
+            tmp  = tempfile.mkdtemp(prefix="psx2psp_prev_")
+            dest = os.path.join(tmp, "preview.mp3")
             try:
                 if c.source == "khinsider":
                     ok = _khi_download_candidate(c, dest,
                          lambda m: self.after(0, lambda msg=m:
-                             self._status.configure(text=msg[:80])),
+                             self._status.configure(text=msg[:100])),
                          track_idx)
                 elif c.source == "archive":
                     ok = _archive_download_candidate(c, dest,
                          lambda m: self.after(0, lambda msg=m:
-                             self._status.configure(text=msg[:80])))
-                elif c.source == "youtube":
+                             self._status.configure(text=msg[:100])))
+                else:
                     ok = _ytdlp_download_candidate(c, dest,
                          lambda m: self.after(0, lambda msg=m:
-                             self._status.configure(text=msg[:80])))
-                else:
-                    ok = False
+                             self._status.configure(text=msg[:100])))
 
                 if ok and os.path.isfile(dest):
                     self._preview_path = dest
-                    self.after(0, self._play_preview)
+                    self._preview_dir  = tmp
+                    self.after(0, self._load_and_play)
                 else:
                     self.after(0, lambda: self._status.configure(
-                        text="Preview download failed.",
+                        text="Download failed — check connection.",
                         foreground=CLR_RED))
+            except Exception as e:
+                self.after(0, lambda msg=str(e): self._status.configure(
+                    text=f"Error: {msg}", foreground=CLR_RED))
             finally:
-                self.after(0, lambda: self._preview_btn.configure(state="normal"))
+                self.after(0, lambda:
+                    self._preview_btn.configure(state="normal"))
 
         threading.Thread(target=_work, daemon=True).start()
 
-    def _play_preview(self):
-        """Open the preview file in the system default audio player."""
-        import subprocess, sys
+    def _load_and_play(self):
         path = self._preview_path
         if not path or not os.path.isfile(path):
             return
-        try:
-            if sys.platform == "win32":
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
+        ok = self._player.load(path)
+        if ok:
+            dur = self._player.duration()
+            self._now_playing.set(
+                f"{os.path.basename(path)}  "
+                f"({os.path.getsize(path)//1024} KB  |  {self._fmt_time(dur)})")
+            self._prog_bar.configure(to=max(dur, 1))
+            self._player.set_volume(self._vol_var.get() / 100)
+            self._player.play()
+            self._start_poll()
             self._status.configure(
-                text=f"▶ Playing: {os.path.basename(path)}  "
-                     f"({os.path.getsize(path)//1024} KB) — "
-                     "close the player when done.",
+                text="▶ Playing in-app. Pick this track or select another.",
                 foreground=CLR_GREEN)
-        except Exception as e:
-            self._status.configure(
-                text=f"Could not open player: {e}", foreground=CLR_RED)
+        else:
+            # pygame unavailable — fall back to system player
+            try:
+                if sys.platform == "win32":
+                    os.startfile(path)
+                else:
+                    import subprocess
+                    cmd = "open" if sys.platform == "darwin" else "xdg-open"
+                    subprocess.Popen([cmd, path])
+                self._status.configure(
+                    text=f"▶ Opened in system player: {os.path.basename(path)}",
+                    foreground=CLR_GREEN)
+            except Exception as e:
+                self._status.configure(
+                    text=f"Playback error: {e}", foreground=CLR_RED)
+
+    # ── Player controls ───────────────────────────────────────────────────────
+
+    def _player_play(self):
+        if self._player.is_paused():
+            self._player.resume()
+            self._start_poll()
+        elif self._player._loaded:
+            self._player.play()
+            self._start_poll()
+
+    def _player_pause(self):
+        if self._player.is_playing():
+            self._player.pause()
+            self._stop_poll()
+
+    def _player_stop(self):
+        self._player.stop()
+        self._stop_poll()
+        self._prog_var.set(0)
+        self._time_lbl.configure(text="0:00 / 0:00")
+
+    def _on_seek(self, value):
+        if self._player._loaded:
+            self._player.seek(float(value))
+            self._start_poll()
+
+    # ── Progress polling ──────────────────────────────────────────────────────
+
+    def _start_poll(self):
+        self._stop_poll()
+        self._poll_job = self.after(200, self._poll_progress)
+
+    def _stop_poll(self):
+        if self._poll_job:
+            self.after_cancel(self._poll_job)
+            self._poll_job = None
+
+    def _poll_progress(self):
+        pos = self._player.position()
+        dur = self._player.duration()
+        if dur > 0:
+            self._prog_var.set(pos)
+            self._time_lbl.configure(
+                text=f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
+        if self._player.is_playing():
+            self._poll_job = self.after(200, self._poll_progress)
+        else:
+            self._prog_var.set(0)
+            self._time_lbl.configure(
+                text=f"0:00 / {self._fmt_time(dur)}")
+
+    @staticmethod
+    def _fmt_time(seconds: float) -> str:
+        s = int(seconds)
+        return f"{s // 60}:{s % 60:02d}"
 
     # ── Confirm / Cancel ──────────────────────────────────────────────────────
 
     def _confirm(self):
         sel = self._album_list.curselection()
         if not sel:
-            self._status.configure(
-                text="Select an album first.", foreground=CLR_RED)
+            self._status.configure(text="Select an album first.", foreground=CLR_RED)
             return
         album_idx = sel[0]
         track_sel = self._track_list.curselection()
-        # Index 0 in listbox = auto-pick (★); 1..N = track 1..N
         track_idx = track_sel[0] if track_sel else 0
+        self._cleanup()
         self._result_cb(self._candidates[album_idx], track_idx)
         self.destroy()
 
     def _cancel(self):
-        # Clean up temp preview file
-        if self._preview_path and os.path.isfile(self._preview_path):
+        self._cleanup()
+        self.destroy()
+
+    def _cleanup(self):
+        self._stop_poll()
+        self._player.unload()
+        if self._preview_dir and os.path.isdir(self._preview_dir):
             try:
-                import shutil
-                shutil.rmtree(os.path.dirname(self._preview_path),
-                              ignore_errors=True)
+                import shutil as _sh
+                _sh.rmtree(self._preview_dir, ignore_errors=True)
             except Exception:
                 pass
-        self.destroy()
 
 
 # ── Image Pick Dialog ─────────────────────────────────────────────────────────

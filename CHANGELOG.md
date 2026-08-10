@@ -4,6 +4,80 @@ All notable changes to PSX2PSP Enhanced (Python Edition) are recorded here.
 
 ---
 
+## [1.1.3] — In-App Audio Preview
+
+### Added
+- **In-app BGM player** — `pygame-ce` powered audio player embedded directly in
+  `BgmPickDialog`. No external media player needed.
+  - ▶ Play / ⏸ Pause / ⏹ Stop buttons
+  - Progress bar with time display (current / total)
+  - Volume slider (0–100 %)
+  - Smooth seek bar — click anywhere on the progress track to jump
+  - Auto-stops and resets when the dialog closes
+- `AudioPlayer` class in `modules/bgm.py` — thin wrapper around `pygame.mixer`
+  that handles init, load, play, pause/resume, stop, seek, volume, and position
+  polling; gracefully no-ops when pygame is unavailable
+- Preview download still caches the file; replaying doesn't re-download
+
+### Changed
+- `BgmPickDialog._play_preview()` now calls `AudioPlayer` instead of
+  `os.startfile()` — playback is fully in-process
+- `BgmPickDialog._cancel()` stops playback before destroying the window
+- `requirements.txt` updated: `pygame` → `pygame-ce>=2.5.0` (pygame-ce supports
+  Python 3.14; original pygame does not)
+
+---
+
+## [1.1.2] — BGM AT3 Fixes & Packaging Fix (updated zip)
+
+### Fixed — AT3 encoding always failed in the pre-built EXE (packaging bug)
+- **`msvcr71.dll` was missing** from every release package since v1.0.0.
+  `at3tool.exe` requires this Visual C++ 2003 runtime DLL; without it the process
+  exits with `0xC0000135` (STATUS_DLL_NOT_FOUND) and produces no output.
+- **`Files/popstation.dll` was missing** from every release package. The conversion
+  engine was never copied into the release folder, causing instant `popstation.dll
+  not found` failure on every conversion attempt.
+- Added `build_release.bat` — documented packaging script that lists every
+  required file; prevents these omissions in future releases.
+- Added `test_at3_frozen.py` — pre-release test that simulates the frozen-EXE
+  environment and verifies at3tool + lame work from the release folder.
+
+### Fixed — AT3 encoding from downloaded audio
+- `_get_audio_ext()` — magic-byte detection (ID3/MPEG, fLaC, OggS, RIFF/WAVE,
+  ftyp/M4A, WebM matroska header); no longer trusts file extension alone
+- `_to_at3()` — routes each format to the correct decoder:
+  - MP3  → `lame --decode` (no ffmpeg needed)
+  - WAV  → resample or direct copy
+  - OGG/FLAC/WebM/M4A → requires ffmpeg; shows clear error if absent
+  - Removed silent "try source directly" fallback that passed WebM to at3tool
+- `_ytdlp_download_candidate()` — without ffmpeg, format is restricted to
+  `mp3/m4a`; WebM/Opus/OGG are explicitly rejected with a helpful message
+
+### Added — BGM Picker UX
+- Tracks auto-load immediately when an album is selected (no manual button)
+- First KH Insider album is pre-selected and tracks auto-load on dialog open
+- Double-click a track to preview it
+- Preview button downloads track to temp and opens in system default player
+- Non-KHI sources show an info row instead of empty track list
+- Cancel cleans up temp preview files
+
+---
+
+## [1.1.1] — Hotfix: EXE close hang + frozen-EXE DB path
+
+### Fixed
+- **App could not be closed** — Background daemon threads (`done_event.wait(300)`
+  in BGM/artwork/patch workers, yt-dlp downloads) kept the EXE process alive after
+  the window closed. `App._on_close()` now calls `sys.exit(0)` after `destroy()`
+  so all daemon threads terminate immediately. Running `BatchRunner` is cancelled first.
+- **"Not found in gameInfo.db" in pre-built EXE** — `constants.py` computed
+  `ROOT_DIR` relative to `__file__`, which in a PyInstaller frozen EXE points to
+  the temporary `_MEIPASS` extract folder, not the folder containing the EXE.
+  When `sys.frozen = True`, `ROOT_DIR` is now set from `sys.executable`'s
+  directory so `Files/gameInfo.db`, `at3tool.exe`, etc. are found correctly.
+
+---
+
 ## [1.1.0] — Patch / Mod / Translation System
 
 ### Added — `modules/patches.py` (new module)

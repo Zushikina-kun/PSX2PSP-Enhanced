@@ -16,7 +16,8 @@ Built on top of the original PSX2PSP by KingSquitter, with a full Python rewrite
 
 | File | Size | SHA256 |
 |------|------|--------|
-| [PSX2PSP_Enhanced_v1.1.0_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest) | ~29 MB | *(see release page)* |
+| [PSX2PSP_Enhanced_v1.1.3_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/latest) | ~30 MB | *(see release page)* |
+| [PSX2PSP_Enhanced_v1.1.2_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/download/v1.1.2/PSX2PSP_Enhanced_v1.1.2_Windows_x64.zip) | 29.9 MB | `FF10F382...B38B20` |
 | [PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases/download/v1.0.0/PSX2PSP_Enhanced_v1.0.0_Windows_x64.zip) | 29.1 MB | `D1CA28E5...350CB47` |
 
 1. Download the latest zip from the [Releases page](https://github.com/Zushikina-kun/PSX2PSP-Enhanced/releases)

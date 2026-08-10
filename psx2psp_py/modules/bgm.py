@@ -29,6 +29,215 @@ from .constants import (
     ARCHIVE_SEARCH, ARCHIVE_META, ARCHIVE_DOWNLOAD,
 )
 
+# ── In-app audio player (pygame-ce) ──────────────────────────────────────────
+
+def _pygame_available() -> bool:
+    """Return True if pygame (or pygame-ce) is importable and usable."""
+    try:
+        import pygame  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+class AudioPlayer:
+    """
+    Thin wrapper around pygame.mixer for in-app MP3/WAV playback.
+
+    Usage:
+        player = AudioPlayer()
+        player.load("track.mp3")
+        player.play()
+        pos = player.position()   # seconds played
+        dur = player.duration()   # total seconds
+        player.pause()
+        player.resume()
+        player.seek(30.0)         # jump to 30 s
+        player.set_volume(0.8)    # 0.0–1.0
+        player.stop()
+        player.unload()
+
+    All methods are no-ops when pygame is unavailable.
+    """
+
+    def __init__(self):
+        self._loaded       = False
+        self._playing      = False
+        self._paused       = False
+        self._dur          = 0.0
+        self._start_ticks  = 0     # pygame.time.get_ticks() when play() was called
+        self._start_mono   = 0.0   # time.monotonic() fallback when ticks = 0
+        self._seek_offset  = 0.0   # seconds already elapsed before last play/seek
+        self._path         = ""
+        self._volume       = 0.8
+
+        if _pygame_available():
+            try:
+                import pygame
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init(frequency=44100, size=-16,
+                                      channels=2, buffer=2048)
+            except Exception:
+                pass
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def load(self, path: str) -> bool:
+        """Load an audio file. Returns True on success."""
+        if not _pygame_available() or not os.path.isfile(path):
+            return False
+        self.stop()
+        try:
+            import pygame
+            pygame.mixer.music.load(path)
+            self._path    = path
+            self._loaded  = True
+            self._dur     = self._get_duration(path)
+            self._seek_offset = 0.0
+            pygame.mixer.music.set_volume(self._volume)
+            return True
+        except Exception:
+            self._loaded = False
+            return False
+
+    def play(self):
+        """Start playback from the current position."""
+        if not self._loaded:
+            return
+        try:
+            import pygame, time
+            pygame.mixer.music.play()
+            self._start_ticks  = pygame.time.get_ticks()
+            self._start_mono   = time.monotonic()
+            self._playing = True
+            self._paused  = False
+        except Exception:
+            pass
+
+    def pause(self):
+        if not self._playing or self._paused:
+            return
+        try:
+            import pygame
+            self._seek_offset = self.position()
+            pygame.mixer.music.pause()
+            self._paused = True
+        except Exception:
+            pass
+
+    def resume(self):
+        if not self._paused:
+            return
+        try:
+            import pygame, time
+            pygame.mixer.music.unpause()
+            self._start_ticks = pygame.time.get_ticks()
+            self._start_mono  = time.monotonic()
+            self._paused = False
+        except Exception:
+            pass
+
+    def stop(self):
+        try:
+            import pygame
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
+        self._playing     = False
+        self._paused      = False
+        self._seek_offset = 0.0
+
+    def seek(self, seconds: float):
+        """Jump to *seconds* in the track."""
+        if not self._loaded:
+            return
+        try:
+            import pygame, time
+            self._seek_offset = max(0.0, min(seconds, self._dur))
+            pygame.mixer.music.play(start=self._seek_offset)
+            self._start_ticks = pygame.time.get_ticks()
+            self._start_mono  = time.monotonic()
+            self._playing = True
+            self._paused  = False
+        except Exception:
+            pass
+
+    def set_volume(self, vol: float):
+        """Set volume 0.0–1.0."""
+        self._volume = max(0.0, min(1.0, vol))
+        try:
+            import pygame
+            pygame.mixer.music.set_volume(self._volume)
+        except Exception:
+            pass
+
+    def unload(self):
+        self.stop()
+        try:
+            import pygame
+            pygame.mixer.music.unload()
+        except Exception:
+            pass
+        self._loaded = False
+        self._path   = ""
+
+    def is_playing(self) -> bool:
+        if not self._loaded or self._paused:
+            return False
+        try:
+            import pygame
+            return bool(pygame.mixer.music.get_busy())
+        except Exception:
+            return False
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def position(self) -> float:
+        """Return current playback position in seconds."""
+        if not self._loaded:
+            return 0.0
+        if self._paused:
+            return self._seek_offset
+        if not self.is_playing():
+            return 0.0
+        try:
+            import pygame, time as _time
+            ticks = pygame.time.get_ticks()
+            if ticks > 0:
+                # pygame display is active — use millisecond timer
+                elapsed = (ticks - self._start_ticks) / 1000.0
+            else:
+                # Headless / no display — use monotonic wall clock
+                elapsed = _time.monotonic() - self._start_mono
+            return min(self._seek_offset + elapsed, self._dur)
+        except Exception:
+            return 0.0
+
+    def duration(self) -> float:
+        return self._dur
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _get_duration(self, path: str) -> float:
+        """Get audio duration in seconds using mutagen or pygame Sound."""
+        # Try mutagen first (most accurate for MP3)
+        try:
+            from mutagen import File as MutagenFile
+            audio = MutagenFile(path)
+            if audio and audio.info:
+                return float(audio.info.length)
+        except Exception:
+            pass
+        # Fallback: pygame Sound (loads fully into memory — works for short files)
+        try:
+            import pygame
+            snd = pygame.mixer.Sound(path)
+            return snd.get_length()
+        except Exception:
+            pass
+        return 0.0
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 _HEADERS = {
